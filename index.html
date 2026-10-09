@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 接水果大冒險 - Teachable Machine Fruit Catcher</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- TensorFlow.js and Teachable Machine Image & Pose Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@latest/dist/teachablemachine-pose.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Noto+Sans+TC:wght@500;700;900&display=swap');
+
+        body {
+            font-family: 'Fredoka', 'Noto Sans TC', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            user-select: none;
+            touch-action: manipulation;
+        }
+
+        .text-stroke {
+            -webkit-text-stroke: 2px #2d1810;
+            text-shadow: 3px 3px 0px rgba(0,0,0,0.5);
+        }
+
+        .wood-panel {
+            background: linear-gradient(180deg, #a0522d 0%, #6b3410 100%);
+            border: 3px solid #3d1e0a;
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.3), 0 6px 12px rgba(0,0,0,0.4);
+        }
+
+        .game-btn {
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 5px 0 #1e3a8a;
+        }
+        .game-btn:active {
+            transform: translateY(4px);
+            box-shadow: 0 1px 0 #1e3a8a;
+        }
+
+        .mirror-video {
+            transform: scaleX(-1);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.5);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-white flex flex-col items-center justify-between p-2 md:p-4">
+
+    <!-- Header Control Bar -->
+    <header class="w-full max-w-5xl flex flex-wrap items-center justify-between gap-3 mb-2 bg-slate-900/90 backdrop-blur-md p-3.5 rounded-2xl border border-slate-700/60 shadow-xl">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-amber-500 flex items-center justify-center text-2xl shadow-lg border-2 border-amber-300">
+                🍎
+            </div>
+            <div>
+                <h1 class="text-xl md:text-2xl font-black tracking-wide text-yellow-300 drop-shadow">AI 森林接水果</h1>
+                <p class="text-xs text-slate-400 hidden sm:block">運用 Teachable Machine 模型進行動作識別控制！</p>
+            </div>
+        </div>
+
+        <!-- AI Model Setup Form -->
+        <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+            <div class="relative flex-1 md:w-80">
+                <input type="text" id="modelUrlInput" 
+                    value="https://teachablemachine.withgoogle.com/models/EGuBtojoc/" 
+                    placeholder="https://teachablemachine.withgoogle.com/models/..." 
+                    class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-yellow-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition pr-8">
+                <i class="fa-solid fa-link absolute right-3 top-2.5 text-slate-500 text-xs"></i>
+            </div>
+            
+            <button id="loadModelBtn" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 transition border border-indigo-400/30 shadow-md">
+                <i class="fa-solid fa-robot text-yellow-300"></i>
+                <span id="loadBtnText">載入 AI 模型</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Game & Camera Layout -->
+    <main class="w-full max-w-5xl flex-1 flex flex-col lg:flex-row gap-4 items-start justify-center">
+
+        <!-- Game Canvas Box -->
+        <div class="w-full lg:flex-1 flex flex-col items-center">
+            
+            <div class="relative w-full aspect-[4/3] max-w-[800px] bg-emerald-950 rounded-3xl overflow-hidden border-4 border-amber-950 shadow-2xl">
+                
+                <!-- HTML5 Canvas -->
+                <canvas id="gameCanvas" class="w-full h-full block cursor-pointer"></canvas>
+
+                <!-- In-Game UI Overlay (Time & Score) -->
+                <div class="absolute top-3 left-3 right-3 flex justify-between items-center pointer-events-none">
+                    <!-- Timer -->
+                    <div class="wood-panel px-4 py-1.5 rounded-2xl flex items-center gap-2 text-amber-100">
+                        <i class="fa-solid fa-stopwatch text-yellow-400 text-lg"></i>
+                        <span class="text-xs font-bold uppercase tracking-wider text-amber-200/80">時間</span>
+                        <span id="uiTimer" class="text-2xl font-black text-white text-stroke tracking-wider">060</span>
+                    </div>
+
+                    <!-- AI Detector Status Badge -->
+                    <div id="aiActiveBadge" class="hidden bg-slate-900/80 border border-emerald-500/50 px-3 py-1 rounded-full flex items-center gap-2 text-xs font-bold shadow-lg">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                        <span id="currentAiActionText" class="text-emerald-300 font-mono uppercase">AI: NEUTRAL</span>
+                    </div>
+
+                    <!-- Score -->
+                    <div class="wood-panel px-4 py-1.5 rounded-2xl flex items-center gap-2 text-amber-100">
+                        <i class="fa-solid fa-trophy text-yellow-400 text-lg"></i>
+                        <span class="text-xs font-bold uppercase tracking-wider text-amber-200/80">得分</span>
+                        <span id="uiScore" class="text-2xl font-black text-yellow-300 text-stroke tracking-wider">000</span>
+                    </div>
+                </div>
+
+                <!-- Touch Buttons for Mobile/Tablet Testing -->
+                <div class="absolute bottom-3 left-3 right-3 flex justify-between pointer-events-auto md:hidden opacity-50 hover:opacity-100 transition">
+                    <button id="btnTouchLeft" class="w-16 h-16 rounded-2xl bg-slate-900/80 border-2 border-white/20 active:bg-amber-500 text-white text-2xl flex items-center justify-center backdrop-blur">
+                        <i class="fa-solid fa-arrow-left"></i>
+                    </button>
+                    <button id="btnTouchRight" class="w-16 h-16 rounded-2xl bg-slate-900/80 border-2 border-white/20 active:bg-amber-500 text-white text-2xl flex items-center justify-center backdrop-blur">
+                        <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                </div>
+
+                <!-- Start & Gesture Guide Overlay -->
+                <div id="startOverlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-4 md:p-6 text-center z-10 overflow-y-auto">
+                    <div class="w-16 h-16 bg-amber-500/20 border-2 border-amber-400/50 rounded-2xl flex items-center justify-center mb-2 text-3xl shadow-inner">
+                        🐱
+                    </div>
+                    <h2 class="text-2xl md:text-3xl font-black text-yellow-300 mb-1 text-stroke">森林接水果 - AI 姿勢操作說明</h2>
+                    <p class="text-xs text-slate-300 max-w-md mb-4">
+                        系統已直接綁定你的 Teachable Machine 模型！<br>開始遊戲前請參考以下手勢控制說明：
+                    </p>
+
+                    <!-- Hand Gesture Demo Cards -->
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-lg mb-5">
+                        <!-- Left Gesture Card -->
+                        <div class="bg-slate-900/90 border border-cyan-500/40 p-2.5 rounded-2xl flex flex-col items-center">
+                            <div class="w-full aspect-square bg-slate-950 rounded-xl overflow-hidden border border-slate-700 mb-2 flex items-center justify-center p-1">
+                                <!-- Thumb Left SVG Illustration -->
+                                <svg class="w-full h-full text-cyan-400 fill-current" viewBox="0 0 100 100">
+                                    <path d="M70,30 C65,30 60,35 60,40 L60,80 C60,85 65,90 70,90 C75,90 80,85 80,80 L80,40 C80,35 75,30 70,30 Z" fill="#991b1b"/>
+                                    <path d="M65,50 C50,50 30,35 15,35 C10,35 5,40 5,46 C5,52 10,56 20,58 L55,65 Z" fill="#fca5a5"/>
+                                    <path d="M45,45 C45,35 55,25 70,25 C80,25 85,35 85,45 L85,80 C85,90 75,95 65,95 C50,95 45,85 45,75 Z" fill="#7f1d1d"/>
+                                    <path d="M40,55 L15,40 C10,38 5,42 5,48 C5,54 12,58 25,62 L45,68 Z" fill="#fecdd3"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs font-bold text-cyan-300 flex items-center gap-1">
+                                <i class="fa-solid fa-arrow-left"></i> 大拇指朝左
+                            </span>
+                            <span class="text-[10px] text-slate-400">控制籃子向左移動</span>
+                        </div>
+
+                        <!-- Right Gesture Card -->
+                        <div class="bg-slate-900/90 border border-emerald-500/40 p-2.5 rounded-2xl flex flex-col items-center">
+                            <div class="w-full aspect-square bg-slate-950 rounded-xl overflow-hidden border border-slate-700 mb-2 flex items-center justify-center p-1">
+                                <!-- Thumb Right SVG Illustration -->
+                                <svg class="w-full h-full text-emerald-400 fill-current" viewBox="0 0 100 100">
+                                    <path d="M30,30 C35,30 40,35 40,40 L40,80 C40,85 35,90 30,90 C25,90 20,85 20,80 L20,40 C20,35 25,30 30,30 Z" fill="#991b1b"/>
+                                    <path d="M35,50 C50,50 70,35 85,35 C90,35 95,40 95,46 C95,52 90,56 80,58 L45,65 Z" fill="#fca5a5"/>
+                                    <path d="M55,45 C55,35 45,25 30,25 C20,25 15,35 15,45 L15,80 C15,90 25,95 35,95 C50,95 55,85 55,75 Z" fill="#7f1d1d"/>
+                                    <path d="M60,55 L85,40 C90,38 95,42 95,48 C95,54 88,58 75,62 L55,68 Z" fill="#fecdd3"/>
+                                </svg>
+                            </div>
+                            <span class="text-xs font-bold text-emerald-300 flex items-center gap-1">
+                                大拇指朝右 <i class="fa-solid fa-arrow-right"></i>
+                            </span>
+                            <span class="text-[10px] text-slate-400">控制籃子向右移動</span>
+                        </div>
+
+                        <!-- Neutral Gesture Card -->
+                        <div class="col-span-2 sm:col-span-1 bg-slate-900/90 border border-slate-700 p-2.5 rounded-2xl flex flex-col items-center justify-center">
+                            <div class="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center text-slate-400 text-2xl mb-2 border border-slate-600">
+                                ✋
+                            </div>
+                            <span class="text-xs font-bold text-yellow-300 mb-0.5">放鬆 / 無手勢</span>
+                            <span class="text-[10px] text-slate-400 text-center">籃子將即刻停在原地，不暴衝！</span>
+                        </div>
+                    </div>
+
+                    <button id="startGameBtn" class="game-btn bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-lg px-8 py-3 rounded-2xl border-2 border-emerald-200 tracking-wider flex items-center gap-3">
+                        <i class="fa-solid fa-camera"></i>
+                        啟用視訊 & 開始遊戲
+                    </button>
+                </div>
+
+                <!-- Game Over Overlay -->
+                <div id="gameOverModal" class="hidden absolute inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20">
+                    <div id="gameOverIcon" class="text-6xl mb-2">🎉</div>
+                    <h2 class="text-3xl font-black text-yellow-300 mb-1 text-stroke">時間到！遊戲結束</h2>
+                    <p class="text-sm text-slate-400 mb-4">太棒了！這是你本次獲得的成績</p>
+                    
+                    <div class="wood-panel p-4 rounded-2xl w-full max-w-xs mb-6 flex justify-around items-center border-amber-700">
+                        <div class="text-center">
+                            <div class="text-xs text-amber-200/80 font-bold">最終得分</div>
+                            <div id="finalScore" class="text-3xl font-black text-yellow-300 text-stroke">0</div>
+                        </div>
+                        <div class="w-px h-8 bg-amber-800"></div>
+                        <div class="text-center">
+                            <div class="text-[11px] text-amber-200/80 font-bold">歷史高分</div>
+                            <div id="highScore" class="text-3xl font-black text-cyan-300 text-stroke">0</div>
+                        </div>
+                    </div>
+
+                    <button id="restartGameBtn" class="game-btn bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black text-lg px-8 py-3 rounded-2xl border-2 border-yellow-200 flex items-center gap-2">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        再玩一次
+                    </button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Right Side Panel: Camera Preview & Model Action Mapping -->
+        <div class="w-full lg:w-80 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-3xl p-4 shadow-2xl flex flex-col gap-4">
+            
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-camera text-cyan-400"></i>
+                    <h3 class="font-bold text-slate-100 text-sm">視訊與 AI 控制面板</h3>
+                </div>
+                <span id="aiStatusBadge" class="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">未啟用</span>
+            </div>
+
+            <!-- WebCam View Box -->
+            <div class="relative w-full aspect-video bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+                <video id="webcamVideo" autoplay playsinline muted class="hidden w-full h-full object-cover mirror-video"></video>
+                <div id="webcamPlaceholder" class="flex flex-col items-center justify-center text-slate-600 gap-2 p-4 text-center">
+                    <i class="fa-solid fa-video-slash text-3xl"></i>
+                    <span class="text-xs">請點擊上方「載入 AI 模型」<br>開啟視訊鏡頭</span>
+                </div>
+                <!-- Action Alert Overlay -->
+                <div id="webcamActionOverlay" class="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur text-yellow-300 text-xs px-2.5 py-1 rounded-lg border border-white/10 font-mono font-bold hidden">
+                    DETECT: -
+                </div>
+            </div>
+
+            <!-- Prediction Class Probabilities -->
+            <div id="probabilitiesContainer" class="flex flex-col gap-1.5 text-xs">
+                <span class="text-[11px] font-bold text-slate-400">機率辨識狀態 (Prediction Probabilities)</span>
+                <div id="labelBars" class="flex flex-col gap-1.5 bg-slate-950 p-2.5 rounded-xl border border-slate-800 min-h-[60px] justify-center text-slate-500 text-[11px]">
+                    尚未載入模型...
+                </div>
+            </div>
+
+            <!-- Action Mapping Dropdowns -->
+            <div id="mappingSection" class="flex flex-col gap-2.5 border-t border-slate-800 pt-3">
+                <div class="text-xs font-bold text-yellow-400 flex items-center justify-between">
+                    <span><i class="fa-solid fa-gamepad mr-1"></i>動作控制對應 Mapping</span>
+                    <span class="text-[10px] text-slate-400 font-normal">自動偵測類別</span>
+                </div>
+
+                <div class="space-y-2 text-xs">
+                    <div class="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <span class="text-slate-300 font-bold flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrow-left text-cyan-400"></i> 向左 (Left)
+                        </span>
+                        <select id="mapLeftSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-cyan-400 w-32"></select>
+                    </div>
+
+                    <div class="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <span class="text-slate-300 font-bold flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrows-left-right text-slate-400"></i> 中間 (Neutral)
+                        </span>
+                        <select id="mapNeutralSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-slate-400 w-32"></select>
+                    </div>
+
+                    <div class="flex items-center justify-between bg-slate-950 p-2 rounded-xl border border-slate-800">
+                        <span class="text-slate-300 font-bold flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrow-right text-emerald-400"></i> 向右 (Right)
+                        </span>
+                        <select id="mapRightSelect" class="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 text-xs focus:outline-none focus:border-emerald-400 w-32"></select>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="mt-4 text-center text-xs text-slate-500">
+        HTML5 Canvas + Teachable Machine Integration • Powered by TensorFlow.js
+    </footer>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // Game Configuration & State Variables
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Permanently bound default Teachable Machine URL
+        const DEFAULT_MODEL_URL = "https://teachablemachine.withgoogle.com/models/EGuBtojoc/";
+
+        // Internal Canvas Resolution
+        canvas.width = 800;
+        canvas.height = 600;
+
+        let gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER'
+        let score = 0;
+        let highScore = localStorage.getItem('fruit_catcher_hi') || 0;
+        let timeRemaining = 60;
+        let timerInterval = null;
+        let lastTime = 0;
+
+        // Player State
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height - 90,
+            targetX: canvas.width / 2,
+            width: 100,
+            height: 90,
+            speed: 12,
+            basketYOffset: 25,
+            basketWidth: 80,
+            animFrame: 0,
+            facingRight: true
+        };
+
+        // Falling Items Array
+        let items = [];
+        let particles = [];
+        let floatingTexts = [];
+
+        // Item Definitions
+        const ITEM_TYPES = [
+            { type: 'apple', emoji: '🍎', score: 5, color: '#ef4444', speed: 3.5, size: 36, weight: 40 },
+            { type: 'banana', emoji: '🍌', score: 10, color: '#eab308', speed: 4.5, size: 38, weight: 30 },
+            { type: 'watermelon', emoji: '🍉', score: 15, color: '#22c55e', speed: 3.0, size: 44, weight: 15 },
+            { type: 'poison', emoji: '🍄', score: -10, color: '#a855f7', speed: 4.0, size: 36, weight: 10 },
+            { type: 'bomb', emoji: '💣', score: -15, color: '#64748b', speed: 5.0, size: 36, weight: 5 }
+        ];
+
+        // Teachable Machine AI State Variables
+        let tmModel = null;
+        let modelType = 'image';
+        let isWebcamRunning = false;
+        let webcamElement = document.getElementById('webcamVideo');
+        let currentAiAction = 'NEUTRAL';
+        let classLabels = [];
+
+        // Keyboard Controls
+        const keys = { left: false, right: false };
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+            if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+            if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+        });
+
+        // DOM Buttons
+        document.getElementById('startGameBtn').addEventListener('click', async () => {
+            if (!tmModel) {
+                await loadTeachableMachineModel(DEFAULT_MODEL_URL);
+            }
+            startGame();
+        });
+        document.getElementById('restartGameBtn').addEventListener('click', startGame);
+        document.getElementById('loadModelBtn').addEventListener('click', () => {
+            const customUrl = document.getElementById('modelUrlInput').value.trim();
+            loadTeachableMachineModel(customUrl || DEFAULT_MODEL_URL);
+        });
+
+        async function loadTeachableMachineModel(targetUrl) {
+            const rawUrl = targetUrl || DEFAULT_MODEL_URL;
+            const modelUrl = rawUrl.endsWith('/') ? rawUrl : rawUrl + '/';
+            const modelJsonUrl = modelUrl + 'model.json';
+            const metadataJsonUrl = modelUrl + 'metadata.json';
+
+            const loadBtnText = document.getElementById('loadBtnText');
+            const aiStatusBadge = document.getElementById('aiStatusBadge');
+            if (loadBtnText) loadBtnText.textContent = '載入模型中...';
+
+            try {
+                modelType = 'image';
+                tmModel = await tmImage.load(modelJsonUrl, metadataJsonUrl);
+                classLabels = tmModel.getClassLabels();
+            } catch (errImage) {
+                try {
+                    modelType = 'pose';
+                    tmModel = await tmPose.load(modelJsonUrl, metadataJsonUrl);
+                    classLabels = tmModel.getClassLabels();
+                } catch (errPose) {
+                    console.error("Failed loading model:", errPose);
+                    alert("無法載入 Teachable Machine 模型，請確認網路或連結。系統將允許使用鍵盤控制！");
+                    if (loadBtnText) loadBtnText.textContent = '載入 AI 模型';
+                    return;
+                }
+            }
+
+            if (loadBtnText) loadBtnText.textContent = '模型就緒';
+            if (aiStatusBadge) {
+                aiStatusBadge.textContent = 'AI 綁定成功';
+                aiStatusBadge.className = 'text-[10px] bg-emerald-950 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-700';
+            }
+
+            populateMappingDropdowns(classLabels);
+            setupWebcam();
+        }
+
+        function populateMappingDropdowns(labels) {
+            const leftSelect = document.getElementById('mapLeftSelect');
+            const neutralSelect = document.getElementById('mapNeutralSelect');
+            const rightSelect = document.getElementById('mapRightSelect');
+
+            leftSelect.innerHTML = '';
+            neutralSelect.innerHTML = '';
+            rightSelect.innerHTML = '';
+
+            labels.forEach((label, idx) => {
+                const optL = new Option(label, label);
+                const optN = new Option(label, label);
+                const optR = new Option(label, label);
+
+                leftSelect.add(optL);
+                neutralSelect.add(optN);
+                rightSelect.add(optR);
+            });
+
+            // Smart Auto-selection heuristics based on label strings
+            labels.forEach((label) => {
+                const lower = label.toLowerCase();
+                if (lower.includes('left') || lower.includes('左') || lower.includes('class 1') || lower.includes('1')) {
+                    leftSelect.value = label;
+                } else if (lower.includes('right') || lower.includes('右') || lower.includes('class 2') || lower.includes('2')) {
+                    rightSelect.value = label;
+                } else if (lower.includes('neutral') || lower.includes('center') || lower.includes('中') || lower.includes('class 3') || lower.includes('3')) {
+                    neutralSelect.value = label;
+                }
+            });
+
+            // Fallback default index picking if auto-selection was ambiguous
+            if (labels.length >= 2 && leftSelect.value === rightSelect.value) {
+                leftSelect.selectedIndex = 0;
+                rightSelect.selectedIndex = labels.length - 1;
+                if (labels.length >= 3) neutralSelect.selectedIndex = 1;
+            }
+        }
+
+        async function setupWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 }, audio: false });
+                webcamElement.srcObject = stream;
+                webcamElement.classList.remove('hidden');
+                document.getElementById('webcamPlaceholder').classList.add('hidden');
+                document.getElementById('webcamActionOverlay').classList.remove('hidden');
+                document.getElementById('aiActiveBadge').classList.remove('hidden');
+
+                isWebcamRunning = true;
+                requestAnimationFrame(predictLoop);
+            } catch (err) {
+                console.error("Camera access denied or error:", err);
+                alert("無法存取攝影機。你可以繼續使用鍵盤 (← / → 鍵) 遊玩！");
+            }
+        }
+
+        async function predictLoop() {
+            if (!isWebcamRunning || !tmModel) return;
+
+            let predictions = [];
+            if (modelType === 'image') {
+                predictions = await tmModel.predict(webcamElement);
+            } else if (modelType === 'pose') {
+                const { pose, posenetOutput } = await tmModel.estimatePose(webcamElement);
+                predictions = await tmModel.predict(posenetOutput);
+            }
+
+            updateProbabilityBars(predictions);
+            processAiAction(predictions);
+
+            requestAnimationFrame(predictLoop);
+        }
+
+        function updateProbabilityBars(predictions) {
+            const container = document.getElementById('labelBars');
+            container.innerHTML = '';
+
+            predictions.forEach(pred => {
+                const prob = (pred.probability * 100).toFixed(0);
+                const row = document.createElement('div');
+                row.className = 'flex flex-col gap-0.5';
+                row.innerHTML = `
+                    <div class="flex justify-between text-[10px] text-slate-300 font-bold">
+                        <span>${pred.className}</span>
+                        <span>${prob}%</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div class="h-full bg-indigo-500 transition-all duration-100" style="width: ${prob}%"></div>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function processAiAction(predictions) {
+            if (!predictions || predictions.length === 0) return;
+
+            const leftClass = document.getElementById('mapLeftSelect').value;
+            const neutralClass = document.getElementById('mapNeutralSelect').value;
+            const rightClass = document.getElementById('mapRightSelect').value;
+
+            // Find prediction with highest confidence
+            let highest = predictions.reduce((prev, current) => (prev.probability > current.probability) ? prev : current);
+
+            // 靈敏度調整：提高門檻至 0.70 (70%)，避免環境噪訊或小動作誤判
+            const CONFIDENCE_THRESHOLD = 0.70;
+
+            if (highest && highest.probability >= CONFIDENCE_THRESHOLD) {
+                if (highest.className === leftClass) {
+                    currentAiAction = 'LEFT';
+                } else if (highest.className === rightClass) {
+                    currentAiAction = 'RIGHT';
+                } else if (highest.className === neutralClass) {
+                    currentAiAction = 'NEUTRAL';
+                } else {
+                    currentAiAction = 'NEUTRAL';
+                }
+            } else {
+                // 信心度不足或沒有明確比出手勢時，自動歸零為 NEUTRAL（原地待命）
+                currentAiAction = 'NEUTRAL';
+            }
+
+            document.getElementById('webcamActionOverlay').textContent = `ACTION: ${currentAiAction}`;
+            document.getElementById('currentAiActionText').textContent = `AI: ${currentAiAction}`;
+        }
+
+        function startGame() {
+            score = 0;
+            timeRemaining = 60;
+            items = [];
+            particles = [];
+            floatingTexts = [];
+            player.x = canvas.width / 2;
+            player.targetX = canvas.width / 2;
+
+            document.getElementById('uiScore').textContent = '000';
+            document.getElementById('uiTimer').textContent = '060';
+            document.getElementById('startOverlay').classList.add('hidden');
+            document.getElementById('gameOverModal').classList.add('hidden');
+
+            gameState = 'PLAYING';
+
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (gameState === 'PLAYING') {
+                    timeRemaining--;
+                    document.getElementById('uiTimer').textContent = String(timeRemaining).padStart(3, '0');
+                    if (timeRemaining <= 0) {
+                        endGame();
+                    }
+                }
+            }, 1000);
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            clearInterval(timerInterval);
+
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('fruit_catcher_hi', highScore);
+            }
+
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('highScore').textContent = highScore;
+            document.getElementById('gameOverModal').classList.remove('hidden');
+        }
+
+        function spawnItem() {
+            if (Math.random() < 0.04) { // Spawn rate
+                // Weighted Random Selection
+                const totalWeight = ITEM_TYPES.reduce((acc, i) => acc + i.weight, 0);
+                let rand = Math.random() * totalWeight;
+                let selected = ITEM_TYPES[0];
+
+                for (let i = 0; i < ITEM_TYPES.length; i++) {
+                    if (rand < ITEM_TYPES[i].weight) {
+                        selected = ITEM_TYPES[i];
+                        break;
+                    }
+                    rand -= ITEM_TYPES[i].weight;
+                }
+
+                items.push({
+                    ...selected,
+                    x: Math.random() * (canvas.width - 80) + 40,
+                    y: -40,
+                    rotation: Math.random() * Math.PI,
+                    rotSpeed: (Math.random() - 0.5) * 0.05
+                });
+            }
+        }
+
+        function update(deltaTime) {
+            if (gameState !== 'PLAYING') return;
+
+            // Player Movement Control logic (Combining AI Action + Keyboard)
+            let moveDir = 0;
+            if (keys.left || currentAiAction === 'LEFT') moveDir -= 1;
+            if (keys.right || currentAiAction === 'RIGHT') moveDir += 1;
+
+            // 降低移動加速度（從 12 降至 8），讓整體手感更平穩
+            const MOVE_SPEED = 8;
+
+            if (moveDir < 0) {
+                player.targetX -= MOVE_SPEED;
+                player.facingRight = false;
+            } else if (moveDir > 0) {
+                player.targetX += MOVE_SPEED;
+                player.facingRight = true;
+            } else {
+                // 核心修復：當未比出左右手勢時，將目標位置重置為當前位置，讓貓咪立即停止並待在原地
+                player.targetX = player.x;
+            }
+
+            // Clamp Target within screen boundary
+            player.targetX = Math.max(player.width / 2, Math.min(canvas.width - player.width / 2, player.targetX));
+
+            // Smooth Movement Lerp (Linear Interpolation)
+            player.x += (player.targetX - player.x) * 0.18;
+
+            // Spawn Items
+            spawnItem();
+
+            // Update Items
+            for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                item.y += item.speed;
+                item.rotation += item.rotSpeed;
+
+                // AABB Collision Box with Player Basket
+                const basketTop = player.y - player.basketYOffset;
+                const basketLeft = player.x - player.basketWidth / 2;
+                const basketRight = player.x + player.basketWidth / 2;
+
+                if (
+                    item.y + item.size / 2 >= basketTop &&
+                    item.y - item.size / 2 <= basketTop + 20 &&
+                    item.x >= basketLeft &&
+                    item.x <= basketRight
+                ) {
+                    // Catch Fruit!
+                    score += item.score;
+                    if (score < 0) score = 0;
+                    document.getElementById('uiScore').textContent = String(score).padStart(3, '0');
+
+                    createParticles(item.x, item.y, item.color);
+                    createFloatingText(item.x, item.y - 20, item.score >= 0 ? `+${item.score}` : `${item.score}`, item.color);
+
+                    items.splice(i, 1);
+                    continue;
+                }
+
+                // Missed Item (Fell off screen)
+                if (item.y > canvas.height + 40) {
+                    items.splice(i, 1);
+                }
+            }
+
+            // Update Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= 0.03;
+                if (p.alpha <= 0) particles.splice(i, 1);
+            }
+
+            // Update Floating Texts
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                const ft = floatingTexts[i];
+                ft.y -= 1.5;
+                ft.alpha -= 0.02;
+                if (ft.alpha <= 0) floatingTexts.splice(i, 1);
+            }
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 12; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    size: Math.random() * 6 + 3,
+                    color: color,
+                    alpha: 1
+                });
+            }
+        }
+
+        function createFloatingText(x, y, text, color) {
+            floatingTexts.push({ x, y, text, color, alpha: 1 });
+        }
+
+        function render() {
+            // 1. Clear & Draw Forest Background
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Sky Gradient
+            const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            skyGrad.addColorStop(0, '#38bdf8');
+            skyGrad.addColorStop(0.6, '#bae6fd');
+            skyGrad.addColorStop(1, '#4ade80');
+            ctx.fillStyle = skyGrad;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Background Distant Hills
+            ctx.fillStyle = '#16a34a';
+            ctx.beginPath();
+            ctx.arc(150, 500, 300, 0, Math.PI * 2);
+            ctx.arc(650, 520, 350, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Trees
+            ctx.fillStyle = '#15803d';
+            ctx.beginPath();
+            ctx.arc(80, 220, 100, 0, Math.PI * 2);
+            ctx.arc(720, 200, 120, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#713f12'; // Tree Trunks
+            ctx.fillRect(60, 280, 40, 250);
+            ctx.fillRect(700, 260, 45, 270);
+
+            // Foreground Ground Grass
+            ctx.fillStyle = '#22c55e';
+            ctx.fillRect(0, canvas.height - 70, canvas.width, 70);
+            ctx.fillStyle = '#15803d';
+            ctx.fillRect(0, canvas.height - 65, canvas.width, 10);
+
+            // 2. Draw Falling Items (Fruits & Bombs)
+            items.forEach(item => {
+                ctx.save();
+                ctx.translate(item.x, item.y);
+                ctx.rotate(item.rotation);
+                ctx.font = `${item.size}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(item.emoji, 0, 0);
+                ctx.restore();
+            });
+
+            // 3. Draw Player Mascot (Cat + Basket)
+            ctx.save();
+            ctx.translate(player.x, player.y);
+
+            // Draw Basket above head
+            ctx.fillStyle = '#854d0e';
+            ctx.beginPath();
+            ctx.ellipse(0, -player.basketYOffset, player.basketWidth / 2, 16, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#451a03';
+            ctx.stroke();
+
+            // Basket Texture details
+            ctx.strokeStyle = '#a16207';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-player.basketWidth / 2 + 10, -player.basketYOffset);
+            ctx.lineTo(player.basketWidth / 2 - 10, -player.basketYOffset);
+            ctx.stroke();
+
+            // Draw Cat Head
+            if (!player.facingRight) ctx.scale(-1, 1);
+
+            ctx.fillStyle = '#fbbf24'; // Orange Cat body
+            ctx.beginPath();
+            ctx.arc(0, 10, 32, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#78350f';
+            ctx.stroke();
+
+            // Cat Ears
+            ctx.fillStyle = '#f59e0b';
+            ctx.beginPath();
+            ctx.moveTo(-24, -15); ctx.lineTo(-12, -35); ctx.lineTo(-2, -20);
+            ctx.moveTo(24, -15); ctx.lineTo(12, -35); ctx.lineTo(2, -20);
+            ctx.fill(); ctx.stroke();
+
+            // Cat Face
+            ctx.fillStyle = '#27272a';
+            ctx.beginPath();
+            ctx.arc(10, 4, 4, 0, Math.PI * 2); // Eye
+            ctx.arc(-10, 4, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Cheeks
+            ctx.fillStyle = '#f43f5e';
+            ctx.beginPath();
+            ctx.arc(16, 12, 5, 0, Math.PI * 2);
+            ctx.arc(-16, 12, 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+
+            // 4. Draw Particles
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            });
+
+            // 5. Draw Floating Score Text
+            floatingTexts.forEach(ft => {
+                ctx.save();
+                ctx.globalAlpha = ft.alpha;
+                ctx.fillStyle = ft.color;
+                ctx.font = '900 24px Fredoka, sans-serif';
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 4;
+                ctx.strokeText(ft.text, ft.x, ft.y);
+                ctx.fillText(ft.text, ft.x, ft.y);
+                ctx.restore();
+            });
+        }
+
+        function gameLoop(timestamp) {
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            update(deltaTime);
+            render();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Initialize and Start Animation Loop
+        requestAnimationFrame(gameLoop);
+
+    </script>
+</body>
+</html>
